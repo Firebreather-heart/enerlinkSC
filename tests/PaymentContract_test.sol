@@ -6,57 +6,100 @@ import "remix_accounts.sol";
 import "../contracts/PaymentContract.sol";
 import "../contracts/mocks/MockUSDC.sol";
 
-contract PaymentContractTest {
-    PaymentContract paymentContract;
-    MockUSDC mockUSDC;
-    address owner;
-    address user1;
-    uint256 constant paymentAmountUSDC = 100 * 10**18;
+contract PaymentContractTest is PaymentContract {
+    MockUSDC usdc;
+    address alice;
+    address bob;
+
+    uint256 constant ETH_AMOUNT  = 1 ether;
+    uint256 constant USDC_AMOUNT = 100 * 10**6;
+
+    constructor() PaymentContract(TestsAccounts.getAccount(0), address(0)) payable {
+        // Owner is account-0, USDC address set in beforeAll
+    }
 
     function beforeAll() public {
-        owner = TestsAccounts.getAccount(0);
-        user1 = TestsAccounts.getAccount(1);
+        alice = TestsAccounts.getAccount(1);
+        bob   = TestsAccounts.getAccount(2);
 
-        mockUSDC = new MockUSDC();
-        paymentContract = new PaymentContract(address(mockUSDC));
-
-        mockUSDC.mint(user1, paymentAmountUSDC * 2);
+        usdc = new MockUSDC();
+        // Set the USDC token in the inherited contract
+        usdc.mint(owner(), USDC_AMOUNT);
+        // Use internal assignment via low-level call targeting our storage
+        bytes memory payload = abi.encodeWithSignature("setUSDC(address)", address(usdc));
+        address(this).call(payload);
     }
 
-    function check_initial_owner() public {
-        Assert.equal(paymentContract.owner(), owner, "Owner should be account 0");
+    /// #sender: account-1
+    /// #value: 1000000000000000000
+    function testNativePayment() public payable {
+        payWithNative{value: msg.value}();
+
+        (address u, uint256 a, , bool isUSDC) = allPayments(0);
+        Assert.equal(u, alice,      "Wrong payer");
+        Assert.equal(a, msg.value,  "Amount mismatch");
+        Assert.equal(isUSDC, false, "Should be ETH");
     }
 
-    function it_should_accept_native_payment() public {
-        uint beforeBalance = address(paymentContract).balance;
-        Assert.ok(
-            address(paymentContract).call{value: 1 ether}(""),
-            "Native payment transaction failed"
-        );
-        uint afterBalance = address(paymentContract).balance;
-        Assert.equal(afterBalance, beforeBalance + 1 ether, "Contract balance should increase by 1 ether");
+    /// #sender: account-1
+    /// #value: 0
+    function testFailZeroNative() public payable {
+        payWithNative{value: 0}();
     }
 
-    function it_should_accept_USDC_payment() public {
-        // As user1, approve the contract to spend USDC
-        vm.prank(user1);
-        mockUSDC.approve(address(paymentContract), paymentAmountUSDC);
+    /// #sender: account-1
+    function testUSDC_Payment() public {
+        usdc.mint(alice, USDC_AMOUNT);
+        usdc.approve(address(this), USDC_AMOUNT);
+        payWithUSDC(USDC_AMOUNT);
 
-        // As user1, make the payment
-        vm.prank(user1);
-        paymentContract.payWithUSDC(paymentAmountUSDC);
-
-        uint256 contractBalance = mockUSDC.balanceOf(address(paymentContract));
-        Assert.equal(contractBalance, paymentAmountUSDC, "Contract USDC balance is incorrect");
+        (address u, uint256 a, , bool isUSDC) = allPayments(1);
+        Assert.equal(u, alice,       "Wrong USDC payer");
+        Assert.equal(a, USDC_AMOUNT, "USDC amount off");
+        Assert.equal(isUSDC, true,   "Should be USDC");
     }
 
-    function it_should_fail_if_non_owner_withdraws_native() public {
-        // Set calling account to user1 for this test
-        vm.prank(user1);
-        try paymentContract.withdrawNative() {
-            Assert.ok(false, "Withdrawal should have failed for non-owner");
-        } catch Error(string memory reason) {
-            Assert.equal(reason, "Ownable: caller is not the owner", "Wrong revert reason");
-        }
+    /// #sender: account-2
+    function testFailUSDC_NoApproval() public {
+        usdc.mint(bob, USDC_AMOUNT);
+        payWithUSDC(USDC_AMOUNT);
+    }
+
+    /// #sender: account-1
+    function testFailUSDC_ZeroAmount() public {
+        payWithUSDC(0);
+    }
+
+    function testWithdrawals() public {
+        /// #sender: account-1
+        /// #value: 500000000000000000
+        payWithNative{value: 0.5 ether}();
+
+        usdc.mint(alice, USDC_AMOUNT);
+        usdc.approve(address(this), USDC_AMOUNT);
+        payWithUSDC(USDC_AMOUNT);
+
+        uint256 startETH  = owner().balance;
+        uint256 startUSDC = usdc.balanceOf(owner());
+
+        /// #sender: account-0
+        withdrawNative();
+        /// #sender: account-0
+        withdrawUSDC();
+
+        Assert.equal(owner().balance - startETH, 0.5 ether,      "ETH withdrawal failed");
+        Assert.equal(usdc.balanceOf(owner()) - startUSDC, USDC_AMOUNT, "USDC withdrawal failed");
+        Assert.equal(address(this).balance,        0,           "Contract ETH not zero");
+        Assert.equal(usdc.balanceOf(address(this)), 0,          "Contract USDC not zero");
+    }
+
+    /// #sender: account-1
+    function testFailWithdrawETH_ByNonOwner() public {
+        withdrawNative();
+    }
+
+    /// #sender: account-2
+    function testFailWithdrawUSDC_ByNonOwner() public {
+        withdrawUSDC();
     }
 }

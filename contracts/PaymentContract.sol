@@ -7,6 +7,7 @@ import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v5.0.1/contr
 /**
  * @title PaymentContract
  * @dev Receives and logs payments for the Enerlink service.
+ * @custom:dev-run-script scripts/client-interaction.js
  */
 contract PaymentContract is Ownable {
     // === State Variables ===
@@ -31,7 +32,12 @@ contract PaymentContract is Ownable {
     );
 
     // === Functions ===
-    constructor(address _usdcTokenAddress) Ownable(msg.sender) {
+    /**
+     * @dev Sets the initial owner and the USDC contract address.
+     * @param _initialOwner The address to be set as the contract owner.
+     * @param _usdcTokenAddress The address of the USDC token contract.
+     */
+    constructor(address _initialOwner, address _usdcTokenAddress) Ownable(_initialOwner) {
         usdcToken = IERC20(_usdcTokenAddress);
     }
 
